@@ -84,7 +84,7 @@
 
 ```bash
 # Требования: Flutter 3.47+, Android SDK 35+, JDK 21.
-git clone https://github.com/RybinskLab/bridgemesh.git
+git clone https://github.com/gotical/bridgemesh.git
 cd bridgemesh
 flutter pub get
 flutter build apk --debug
