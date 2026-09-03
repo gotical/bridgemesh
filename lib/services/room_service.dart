@@ -9,12 +9,19 @@ import '../models/room.dart';
 import 'identity_service.dart';
 import 'geo_service.dart';
 
-/// Сервис городских (гео) чатов.
+/// Сервис городских (гео) чатов и общего чата.
 ///
 /// Хранит локальные ленты сообщений по комнатам, синхронизирует
 /// их с соседями, накапливает историю и выдаёт «новости» с учётом
 /// времени (TTL). Это позволяет узлам узнавать о событиях в
 /// городе, даже если они не были в эфире в момент публикации.
+///
+/// Есть два специальных чата:
+///  • **Городской** — привязан к городу по GPS (`currentRoom`).
+///    Переехали из Рыбинска в Ярославль — попали в чат
+///    Ярославля.
+///  • **Общий для всех** — фиксированный slug `global`,
+///    доступен всегда, история переезжает с телефоном.
 ///
 /// Стратегия:
 ///  • Каждое сообщение хранится вечно (до разумного лимита).
@@ -24,6 +31,11 @@ import 'geo_service.dart';
 ///    сообщениями (дедуп по id).
 class RoomService extends ChangeNotifierLike {
   static const _kRoomsKey = 'bm_rooms_v1';
+
+  /// Slug глобальной комнаты — доступна всегда.
+  static const String globalSlug = 'global';
+  static const String globalName = 'Общий чат';
+
   static const int maxMessagesPerRoom = 500;
   static const int snapshotSize = 25;
 
@@ -40,6 +52,27 @@ class RoomService extends ChangeNotifierLike {
   /// Слаг комнаты (slug), используется как стабильный ключ.
   String get currentRoomSlug => geo.currentCitySlug;
 
+  /// Человекочитаемое имя комнаты по её slug.
+  /// Для глобальной — «Общий чат», для остальных — имя города.
+  String nameOf(String slug) {
+    if (slug == globalSlug) return globalName;
+    return slug; // city slug вполне читаем, имя берётся из geo
+  }
+
+  /// Список всех доступных комнат — глобальная + локальные города.
+  List<String> availableRooms() {
+    final list = <String>[globalSlug];
+    if (currentRoomSlug != globalSlug) {
+      list.add(currentRoomSlug);
+    }
+    // Добавляем все комнаты из истории (на случай если
+    // пользователь был в других городах и сохранил переписку).
+    for (final k in _rooms.keys) {
+      if (!list.contains(k)) list.add(k);
+    }
+    return list;
+  }
+
   List<RoomMessage> messagesOf(String room) {
     final q = _rooms[room];
     if (q == null) return const [];
@@ -51,18 +84,21 @@ class RoomService extends ChangeNotifierLike {
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_kRoomsKey);
-    if (raw == null) return;
-    try {
-      final map = (jsonDecode(raw) as Map).cast<String, dynamic>();
-      for (final entry in map.entries) {
-        final list = (entry.value as List).cast<Map>();
-        final q = Queue<RoomMessage>();
-        for (final m in list) {
-          q.add(RoomMessage.fromJson(m.cast<String, dynamic>()));
+    if (raw != null) {
+      try {
+        final map = (jsonDecode(raw) as Map).cast<String, dynamic>();
+        for (final entry in map.entries) {
+          final list = (entry.value as List).cast<Map>();
+          final q = Queue<RoomMessage>();
+          for (final m in list) {
+            q.add(RoomMessage.fromJson(m.cast<String, dynamic>()));
+          }
+          _rooms[entry.key] = q;
         }
-        _rooms[entry.key] = q;
-      }
-    } catch (_) {}
+      } catch (_) {}
+    }
+    // Глобальная комната должна существовать всегда.
+    _rooms.putIfAbsent(globalSlug, () => Queue<RoomMessage>());
   }
 
   Future<void> _persist() async {
@@ -87,14 +123,23 @@ class RoomService extends ChangeNotifierLike {
     notifyListeners();
   }
 
-  /// Публикация сообщения в текущей комнате.
-  MeshPacket buildRoomMessagePacket(String text, {String? replyTo}) {
+  /// Публикация сообщения в комнате.
+  ///
+  /// По умолчанию — в текущем городе. Если [slug] == `global` —
+  /// отправляется в общий чат.
+  MeshPacket buildRoomMessagePacket(
+    String text, {
+    String? replyTo,
+    String? slug,
+  }) {
     final id = IdentityService.newPacketId();
+    final targetSlug = slug ?? currentRoomSlug;
+    final targetName = nameOf(targetSlug);
     final msg = RoomMessage(
       id: id,
       fromId: identity.nodeId,
       fromAlias: identity.alias,
-      room: currentRoom,
+      room: targetSlug,
       text: text,
       timestamp: DateTime.now().millisecondsSinceEpoch,
       replyTo: replyTo,
@@ -104,11 +149,15 @@ class RoomService extends ChangeNotifierLike {
     return MeshPacket(
       type: MeshMessageType.room,
       from: identity.alias,
-      to: null, // broadcast в комнату
+      to: null,
       id: id,
       ttl: 8,
       signature: identity.sign('room|$id'),
-      payload: msg.toJson(),
+      payload: {
+        ...msg.toJson(),
+        'roomName': targetName,
+        'isGlobal': targetSlug == globalSlug,
+      },
     );
   }
 

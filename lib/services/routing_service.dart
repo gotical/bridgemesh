@@ -224,10 +224,16 @@ class RoutingService extends ChangeNotifier {
     );
   }
 
-  /// Публикация сообщения в городской комнате.
-  Future<void> sendRoomMessage(String text) async {
+  /// Публикация сообщения в городском или общем чате.
+  ///
+  /// [slug] — slug комнаты (по умолчанию текущий город).
+  /// Для общего чата передавайте `RoomService.globalSlug`.
+  Future<void> sendRoomMessage(String text, {String? slug}) async {
     if (text.trim().isEmpty) return;
-    final pkt = rooms.buildRoomMessagePacket(text.trim());
+    final pkt = rooms.buildRoomMessagePacket(
+      text.trim(),
+      slug: slug,
+    );
     await _sendRaw(pkt);
   }
 
@@ -459,7 +465,24 @@ class RoutingService extends ChangeNotifier {
 
       case MeshMessageType.room:
       case MeshMessageType.roomSnapshot:
-        rooms.onRoomPacket(pkt);
+        await rooms.onRoomPacket(pkt);
+        // Локальный пуш на входящее сообщение в любом чате
+        // (городском или общем). Срабатывает только для чужого
+        // пакета.
+        if (pkt.type == MeshMessageType.room &&
+            pkt.from != identity.alias) {
+          final text = pkt.payload['text']?.toString() ?? '';
+          final slug = pkt.payload['room']?.toString() ?? '';
+          final isGlobal = slug == 'global';
+          await LocalNotify.message(
+            id: pkt.id.hashCode & 0x7fffffff,
+            title: isGlobal
+                ? 'Общий чат'
+                : 'Чат города',
+            body: '${pkt.from}: $text',
+            payload: pkt.from,
+          );
+        }
         if (pkt.ttl > 1) {
           _sendRaw(pkt.copyWith(ttl: pkt.ttl - 1, hop: pkt.hop + 1));
         }

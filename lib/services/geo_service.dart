@@ -2,27 +2,30 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Сервис геолокации + определения текущего города.
 ///
-/// На Android мы:
-///  1. Запрашиваем разрешения.
-///  2. Получаем GPS-координаты.
-///  3. Округляем их до сетки ~3 км и используем как «slug» города
-///     — это даёт стабильный ключ комнаты, который будет совпадать
-///     у всех узлов в одной географической точке.
-///  4. Поддерживаем таблицу «slug → красивое имя» (например
-///     58.05/38.83 → «Рыбинск»), которая расширяется по мере того,
-///     как узлы обмениваются geo-пакетами.
-class GeoService {
+///  1. Запрашивает разрешения.
+ ///  2. Получает GPS-координаты.
+///  3. Округляет до сетки ~3 км и использует как «slug» города —
+///     стабильный ключ комнаты, общий у всех узлов в одной точке.
+///  4. Поддерживает таблицу «slug → красивое имя», которая
+///     пополняется, когда узлы обмениваются geo-пакетами.
+class GeoService extends ChangeNotifier {
   static const _kCityTableKey = 'bm_city_table';
+  static const _kSavedLatKey = 'bm_last_lat';
+  static const _kSavedLonKey = 'bm_last_lon';
+  static const _kSavedSlugKey = 'bm_last_slug';
+  static const _kSavedNameKey = 'bm_last_name';
 
   Position? _position;
   String _currentSlug = 'unknown';
   String _currentName = 'Не определён';
   bool _running = false;
+  bool _hasGpsFix = false;
   Timer? _ticker;
 
   final Map<String, String> _cityTable = {};
@@ -31,6 +34,7 @@ class GeoService {
   String get currentCityName => _currentName;
   String get currentCitySlug => _currentSlug;
   bool get isRunning => _running;
+  bool get hasGpsFix => _hasGpsFix;
 
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
@@ -41,6 +45,20 @@ class GeoService {
           (jsonDecode(raw) as Map).cast<String, String>(),
         );
       } catch (_) {}
+    }
+    // Восстанавливаем последний известный город — чтобы пользователь
+    // видел название, пока новый GPS-запрос ещё не пришёл.
+    final savedLat = prefs.getDouble(_kSavedLatKey);
+    final savedLon = prefs.getDouble(_kSavedLonKey);
+    final savedSlug = prefs.getString(_kSavedSlugKey);
+    final savedName = prefs.getString(_kSavedNameKey);
+    if (savedSlug != null && savedName != null) {
+      _currentSlug = savedSlug;
+      _currentName = savedName;
+      _position = (savedLat != null && savedLon != null)
+          ? _fakePosition(savedLat, savedLon)
+          : null;
+      notifyListeners();
     }
   }
 
@@ -55,13 +73,9 @@ class GeoService {
 
   Future<void> start({Duration period = const Duration(seconds: 60)}) async {
     if (_running) return;
-    final ok = await requestPermission();
-    if (!ok) {
-      _running = false;
-      return;
-    }
     _running = true;
-    _tick();
+    // Первый запуск без тика — он ждёт разрешения.
+    unawaited(_tick());
     _ticker = Timer.periodic(period, (_) => _tick());
   }
 
@@ -69,6 +83,31 @@ class GeoService {
     _running = false;
     _ticker?.cancel();
     _ticker = null;
+  }
+
+  /// Разовый запрос GPS. Используется по тапу «Уточнить».
+  Future<bool> tryDetectNow() async {
+    final ok = await requestPermission();
+    if (!ok) {
+      notifyListeners();
+      return false;
+    }
+    await _tick();
+    return _hasGpsFix;
+  }
+
+  /// Позволяет вручную задать название текущего города (например,
+  /// когда GPS недоступен, но пользователь знает, где он).
+  Future<void> setManualCity(String name) async {
+    final cleaned = name.trim();
+    if (cleaned.isEmpty) return;
+    final slug = 'manual-${cleaned.toLowerCase().replaceAll(RegExp(r"\s+"), "-")}';
+    _currentSlug = slug;
+    _currentName = cleaned;
+    _cityTable[slug] = cleaned;
+    await _persistCity();
+    await _persist();
+    notifyListeners();
   }
 
   Future<void> _tick() async {
@@ -79,11 +118,42 @@ class GeoService {
           timeLimit: Duration(seconds: 8),
         ),
       );
+      _hasGpsFix = true;
       _currentSlug = _slugFor(_position!.latitude, _position!.longitude);
       _currentName = _cityTable[_currentSlug] ?? _defaultName(_currentSlug);
+      await _persistCity();
+      notifyListeners();
     } catch (_) {
-      // Без GPS — остаёмся на старом значении.
+      // GPS недоступен — оставляем последний известный город.
     }
+  }
+
+  Future<void> _persistCity() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (_position != null) {
+      await prefs.setDouble(_kSavedLatKey, _position!.latitude);
+      await prefs.setDouble(_kSavedLonKey, _position!.longitude);
+    }
+    await prefs.setString(_kSavedSlugKey, _currentSlug);
+    await prefs.setString(_kSavedNameKey, _currentName);
+  }
+
+  Position _fakePosition(double lat, double lon) {
+    // Используется только для восстановления превью в UI.
+    // Не отдаётся в роутинг.
+    final t = DateTime.now().millisecondsSinceEpoch.toDouble();
+    return Position(
+      latitude: lat,
+      longitude: lon,
+      timestamp: DateTime.fromMillisecondsSinceEpoch(t.toInt()),
+      accuracy: 0,
+      altitude: 0,
+      altitudeAccuracy: 0,
+      heading: 0,
+      headingAccuracy: 0,
+      speed: 0,
+      speedAccuracy: 0,
+    );
   }
 
   /// Грубая привязка координат к slug вида «58.05-38.83» (≈3 км).
@@ -95,7 +165,6 @@ class GeoService {
 
   /// Подбирает имя по умолчанию на основе координат.
   String _defaultName(String slug) {
-    // Набор опорных городов (Россия + мир).
     const known = <_CityRef>[
       _CityRef('Рыбинск', 58.05, 38.83),
       _CityRef('Ярославль', 57.63, 39.87),
@@ -153,6 +222,7 @@ class GeoService {
     _cityTable[slug] = name;
     if (slug == _currentSlug) _currentName = name;
     await _persist();
+    notifyListeners();
   }
 
   Future<void> _persist() async {

@@ -21,6 +21,7 @@ import 'widgets/dialogs_panel.dart';
 import 'widgets/control_panel.dart';
 import 'widgets/about_screen.dart';
 import 'widgets/restore_banner.dart';
+import 'widgets/nearby_panel.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({
@@ -58,7 +59,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen>
     with SingleTickerProviderStateMixin {
-  late final TabController _tabs = TabController(length: 4, vsync: this);
+  late final TabController _tabs = TabController(length: 5, vsync: this);
   bool _restored = false;
   String _restoredOrigin = '';
 
@@ -141,6 +142,7 @@ class _HomeScreenState extends State<HomeScreen>
                   routing: widget.routing,
                   contacts: widget.contacts,
                   rooms: widget.rooms,
+                  geo: widget.geo,
                 ),
                 Expanded(
                   child: AnimatedSwitcher(
@@ -173,11 +175,18 @@ class _HomeScreenState extends State<HomeScreen>
                         routing: widget.routing,
                         contacts: widget.contacts,
                         geo: widget.geo,
+                        dialogs: widget.dialogs,
                       ),
                       ContactsPanel(
                         identity: widget.identity,
                         contacts: widget.contacts,
                         routing: widget.routing,
+                        dialogs: widget.dialogs,
+                      ),
+                      NearbyPanel(
+                        routing: widget.routing,
+                        contacts: widget.contacts,
+                        identity: widget.identity,
                         dialogs: widget.dialogs,
                       ),
                       ControlPanel(
@@ -310,41 +319,151 @@ class _NetworkIndicator extends StatelessWidget {
   }
 }
 
-class _StatusBar extends StatelessWidget {
+class _StatusBar extends StatefulWidget {
   const _StatusBar({
     required this.routing,
     required this.contacts,
     required this.rooms,
+    required this.geo,
   });
   final RoutingService routing;
   final ContactService contacts;
   final RoomService rooms;
+  final GeoService geo;
+
+  @override
+  State<_StatusBar> createState() => _StatusBarState();
+}
+
+class _StatusBarState extends State<_StatusBar> {
+  @override
+  void initState() {
+    super.initState();
+    widget.routing.addListener(_onChange);
+    widget.contacts.addListener(_onChange);
+    widget.geo.addListener(_onChange);
+  }
+
+  @override
+  void dispose() {
+    widget.routing.removeListener(_onChange);
+    widget.contacts.removeListener(_onChange);
+    widget.geo.removeListener(_onChange);
+    super.dispose();
+  }
+
+  void _onChange() => setState(() {});
 
   @override
   Widget build(BuildContext context) {
-    final n = routing.neighbors.length;
-    final c = contacts.contacts.length;
-    final r = rooms.currentRoom;
+    final n = widget.routing.neighbors.length;
+    final c = widget.contacts.contacts.length;
+    final city = widget.rooms.currentRoom;
+    final slug = widget.rooms.currentRoomSlug;
+    final known = widget.geo.hasGpsFix || slug.startsWith('manual-');
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Expanded(
+                flex: 3,
+                child: _stat('Соседей', n.toString(), Icons.podcasts),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                flex: 4,
+                child: _stat(
+                  'Контактов',
+                  c.toString(),
+                  Icons.people_outline,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                flex: 5,
+                child: _cityStat(city, known),
+              ),
+            ],
+          ),
+          if (!known)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: _InlineButton(
+                      icon: Icons.gps_fixed,
+                      label: 'Уточнить по GPS',
+                      onTap: () => _detectGps(),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _InlineButton(
+                      icon: Icons.edit_location_alt_outlined,
+                      label: 'Указать вручную',
+                      onTap: () => _pickManualCity(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _cityStat(String city, bool known) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: known
+            ? MeshTheme.primary.withValues(alpha: 0.10)
+            : Colors.white.withValues(alpha: 0.03),
+        borderRadius: BorderRadius.circular(12),
+        border: known
+            ? Border.all(color: MeshTheme.primary.withValues(alpha: 0.3))
+            : null,
+      ),
       child: Row(
         children: [
-          Expanded(
-            flex: 3,
-            child: _stat('Соседей', n.toString(), Icons.podcasts),
+          Icon(
+            known
+                ? Icons.location_city_outlined
+                : Icons.location_off_outlined,
+            color: known ? MeshTheme.primary : MeshTheme.textSecondary,
+            size: 16,
           ),
           const SizedBox(width: 6),
           Expanded(
-            flex: 4,
-            child: _stat('Контактов', c.toString(), Icons.people_outline),
-          ),
-          const SizedBox(width: 6),
-          Expanded(
-            flex: 5,
-            child: _stat(
-              'Город',
-              r.isEmpty ? '...' : r,
-              Icons.location_city_outlined,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'Город',
+                  style: TextStyle(
+                    color: MeshTheme.textSecondary,
+                    fontSize: 9,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  known ? city : 'не определён',
+                  style: TextStyle(
+                    color: known
+                        ? MeshTheme.textPrimary
+                        : MeshTheme.textSecondary,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                ),
+              ],
             ),
           ),
         ],
@@ -355,7 +474,7 @@ class _StatusBar extends StatelessWidget {
   Widget _stat(String label, String value, IconData ic) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      margin: const EdgeInsets.only(bottom: 12),
+      margin: const EdgeInsets.only(bottom: 8),
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: 0.03),
         borderRadius: BorderRadius.circular(12),
@@ -391,6 +510,104 @@ class _StatusBar extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Future<void> _detectGps() async {
+    final ok = await widget.geo.tryDetectNow();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          ok
+              ? 'Город: ${widget.rooms.currentRoom}'
+              : 'Не удалось определить. Разрешите геолокацию.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickManualCity() async {
+    final ctrl = TextEditingController(
+      text: widget.rooms.currentRoom == 'Не определён'
+          ? ''
+          : widget.rooms.currentRoom,
+    );
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: MeshTheme.surface,
+        title: const Text(
+          'Укажите город',
+          style: TextStyle(color: MeshTheme.textPrimary),
+        ),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          style: const TextStyle(color: MeshTheme.textPrimary),
+          decoration: const InputDecoration(
+            hintText: 'Например, Ярославль',
+            hintStyle: TextStyle(color: MeshTheme.textSecondary),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, null),
+            child: const Text('Отмена'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, ctrl.text),
+            child: const Text('Сохранить'),
+          ),
+        ],
+      ),
+    );
+    if (result != null && result.trim().isNotEmpty) {
+      await widget.geo.setManualCity(result);
+    }
+  }
+}
+
+class _InlineButton extends StatelessWidget {
+  const _InlineButton({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white.withValues(alpha: 0.04),
+      borderRadius: BorderRadius.circular(10),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 14, color: MeshTheme.primary),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  label,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: MeshTheme.textPrimary,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -442,6 +659,11 @@ class _BottomBar extends StatelessWidget {
             Tab(
               icon: Icon(Icons.contacts_outlined, size: 22),
               text: 'Люди',
+              height: 56,
+            ),
+            Tab(
+              icon: Icon(Icons.podcasts, size: 22),
+              text: 'Рядом',
               height: 56,
             ),
             Tab(
