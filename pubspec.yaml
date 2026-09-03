@@ -1,0 +1,37 @@
+name: bridgemesh
+description: "BridgeMesh — общение без интернета и сотовой связи. Mesh-сеть через Bluetooth и Wi-Fi Direct. RybinskLab, Рыбинск."
+publish_to: 'none'
+version: 1.1.0+2
+
+environment:
+  sdk: ^3.13.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  permission_handler: ^11.3.1
+  shared_preferences: ^2.3.2
+  flutter_blue_plus: ^1.31.15
+  network_info_plus: ^6.1.1
+  uuid: ^4.5.1
+  intl: ^0.20.2
+  flutter_local_notifications: ^17.2.3
+  crypto: ^3.0.6
+  pointycastle: ^3.9.1
+  qr_flutter: ^4.1.0
+  geolocator: ^13.0.2
+  share_plus: ^10.1.2
+  device_info_plus: ^11.2.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+dependency_overrides:
+  # Принудительно старая версия без jni (CMake не собирается в Termux)
+  path_provider_android: 2.2.14
+
+flutter:
+  uses-material-design: true
