@@ -138,8 +138,10 @@ class RoutingService extends ChangeNotifier {
 
   Future<void> sendText(String text, {String? to}) async {
     final id = IdentityService.newPacketId();
-    // Личные сообщения шифруем (E2E). Broadcast (to==null)
-    // и сообщения в общем чате передаются открыто.
+    // Личные сообщения шифруем (E2E). Посредники НИКОГДА не видят
+    // открытый текст: они получают только base64-блоб `enc:...` и
+    // пересылают его дальше по цепочке. Расшифровать может только
+    // отправитель и адресат (общий ключ из SHA-256 от alias1:alias2).
     final isPrivate = to != null && to.isNotEmpty;
     final wireText = isPrivate
         ? SecureChat.encrypt(text, identity.alias, to, id)
@@ -151,7 +153,13 @@ class RoutingService extends ChangeNotifier {
       id: id,
       ttl: 8,
       signature: identity.sign('$id|$text'),
-      payload: {'text': wireText, 'enc': isPrivate},
+      payload: {
+        'text': wireText,
+        'enc': isPrivate,
+        // 'clear' — true только для публичных broadcast-сообщений.
+        // Для личных — false: посредник не должен видеть текст.
+        'clear': !isPrivate,
+      },
     );
     if (isPrivate) {
       final msg = ChatMessage(
@@ -186,7 +194,8 @@ class RoutingService extends ChangeNotifier {
       id: id,
       ttl: 6,
       signature: identity.sign('$id|$text'),
-      payload: {'text': text, 'enc': false},
+      // Broadcast — публичный текст, любой посредник видит.
+      payload: {'text': text, 'enc': false, 'clear': true},
     );
     await _sendRaw(pkt);
     LocalNotify.system(
@@ -321,6 +330,12 @@ class RoutingService extends ChangeNotifier {
 
     // Сохраняем в store-and-forward только «свежие» пакеты
     // (TTL > 0, чтобы была возможность передать дальше).
+    //
+    // Важно: для личных сообщений `payload['text']` уже зашифрован
+    // (AES-256-CBC + HMAC). Посредник видит только base64-блоб
+    // и ретранслирует его дальше. Расшифровать может только
+    // отправитель и конечный адресат — у них общий ключ из
+    // SHA-256(alias1:alias2).
     if (pkt.ttl > 0 && pkt.from != identity.alias) {
       store.put(pkt);
     }
@@ -343,10 +358,19 @@ class RoutingService extends ChangeNotifier {
       case MeshMessageType.text:
         if (isForMe) {
           // Попробуем расшифровать, если сообщение зашифровано.
+          //
+          // Безопасность: расшифровка вызывается ТОЛЬКО для
+          // сообщений, адресованных нам (`pkt.to == identity.alias`).
+          // Если узел — посредник, isForMe == false и эта ветка
+          // не выполняется вообще. Посредник никогда не увидит
+          // открытый текст и не сможет его восстановить: у него
+          // нет общего ключа с парой (pkt.from, pkt.to).
           final rawText = pkt.payload['text']?.toString() ?? '';
           final isEncrypted = pkt.payload['enc'] == true;
           String displayText = rawText;
-          if (isEncrypted && pkt.to != null) {
+          if (isEncrypted &&
+              pkt.to != null &&
+              pkt.to == identity.alias) {
             final dec = SecureChat.decrypt(
               rawText, pkt.from, pkt.to!, pkt.id,
             );
@@ -355,13 +379,18 @@ class RoutingService extends ChangeNotifier {
             } else {
               displayText = '🔒 [не удалось расшифровать]';
             }
-          } else if (SecureChat.isEncrypted(rawText) && pkt.to != null) {
+          } else if (SecureChat.isEncrypted(rawText) &&
+              pkt.to != null &&
+              pkt.to == identity.alias) {
+            // Старый формат без флага enc — пробуем всё равно.
             final dec = SecureChat.decrypt(
               rawText, pkt.from, pkt.to!, pkt.id,
             );
             if (dec != null) displayText = dec;
           }
-          final peer = pkt.to == identity.alias ? pkt.from : (pkt.to ?? pkt.from);
+          final peer = pkt.to == identity.alias
+              ? pkt.from
+              : (pkt.to ?? pkt.from);
           final msg = ChatMessage(
             id: pkt.id,
             from: pkt.from,

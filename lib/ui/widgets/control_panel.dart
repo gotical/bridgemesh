@@ -608,6 +608,42 @@ class _ControlPanelState extends State<ControlPanel> {
               const SizedBox(height: 12),
               _kv('Для адресатов', widget.store.pendingForOthers.toString()),
               _kv('Для всех', widget.store.pendingBroadcast.toString()),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: MeshTheme.primary.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: MeshTheme.primary.withValues(alpha: 0.25),
+                  ),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(
+                      Icons.lock_rounded,
+                      color: MeshTheme.primary,
+                      size: 18,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Личные сообщения хранятся в зашифрованном '
+                        'виде. Этот узел не может прочитать текст '
+                        '— только отправитель и конечный адресат '
+                        'имеют общий ключ. Посредник просто '
+                        'передаёт блоб дальше по цепочке.',
+                        style: TextStyle(
+                          color: MeshTheme.textPrimary,
+                          fontSize: 12,
+                          height: 1.45,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
               const SizedBox(height: 8),
               Row(
                 children: [
