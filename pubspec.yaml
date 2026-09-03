@@ -1,7 +1,7 @@
 name: bridgemesh
-description: "BridgeMesh — общение без интернета и сотовой связи. Mesh-сеть через Bluetooth и Wi-Fi Direct. RybinskLab, Рыбинск."
+description: "BridgeMesh — связь без интернета и сотовой связи. Mesh-сеть через Bluetooth и Wi-Fi Direct. Утилита на случай ЧС. RybinskLab."
 publish_to: 'none'
-version: 1.1.0+2
+version: 1.2.0+3
 
 environment:
   sdk: ^3.13.2

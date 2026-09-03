@@ -11,13 +11,13 @@ import '../services/transport_bluetooth.dart';
 import '../services/transport_wifi_direct.dart';
 import '../services/backup_service.dart';
 import '../services/power_mode.dart';
+import '../services/dialogs_service.dart';
 import '../theme/mesh_theme.dart';
 import 'widgets/permission_gate.dart';
-import 'widgets/chat_panel.dart';
 import 'widgets/contacts_panel.dart';
 import 'widgets/animated_card.dart';
 import 'widgets/rooms_panel.dart';
-import 'widgets/nearby_panel.dart';
+import 'widgets/dialogs_panel.dart';
 import 'widgets/control_panel.dart';
 import 'widgets/about_screen.dart';
 import 'widgets/restore_banner.dart';
@@ -36,6 +36,7 @@ class HomeScreen extends StatefulWidget {
     required this.store,
     required this.backup,
     required this.power,
+    required this.dialogs,
   });
 
   final IdentityService identity;
@@ -49,6 +50,7 @@ class HomeScreen extends StatefulWidget {
   final MessageStore store;
   final BackupService backup;
   final PowerModeService power;
+  final DialogsService dialogs;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -56,7 +58,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen>
     with SingleTickerProviderStateMixin {
-  late final TabController _tabs = TabController(length: 5, vsync: this);
+  late final TabController _tabs = TabController(length: 4, vsync: this);
   bool _restored = false;
   String _restoredOrigin = '';
 
@@ -159,10 +161,11 @@ class _HomeScreenState extends State<HomeScreen>
                       key: ValueKey(_tabs.index),
                       controller: _tabs,
                       children: [
-                      ChatPanel(
+                      DialogsPanel(
                         identity: widget.identity,
-                        routing: widget.routing,
                         contacts: widget.contacts,
+                        dialogs: widget.dialogs,
+                        routing: widget.routing,
                       ),
                       RoomsPanel(
                         identity: widget.identity,
@@ -175,10 +178,7 @@ class _HomeScreenState extends State<HomeScreen>
                         identity: widget.identity,
                         contacts: widget.contacts,
                         routing: widget.routing,
-                      ),
-                      NearbyPanel(
-                        routing: widget.routing,
-                        contacts: widget.contacts,
+                        dialogs: widget.dialogs,
                       ),
                       ControlPanel(
                         identity: widget.identity,
@@ -431,7 +431,7 @@ class _BottomBar extends StatelessWidget {
           tabs: const [
             Tab(
               icon: Icon(Icons.chat_bubble_outline, size: 22),
-              text: 'Чат',
+              text: 'Диалоги',
               height: 56,
             ),
             Tab(
@@ -442,11 +442,6 @@ class _BottomBar extends StatelessWidget {
             Tab(
               icon: Icon(Icons.contacts_outlined, size: 22),
               text: 'Люди',
-              height: 56,
-            ),
-            Tab(
-              icon: Icon(Icons.podcasts, size: 22),
-              text: 'Рядом',
               height: 56,
             ),
             Tab(

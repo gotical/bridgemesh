@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:collection';
 
 import 'package:flutter/foundation.dart';
 
@@ -15,6 +14,8 @@ import 'room_service.dart';
 import 'geo_service.dart';
 import 'message_store.dart';
 import 'secure_chat.dart';
+import 'dialogs_service.dart';
+import 'local_notify.dart';
 
 /// Сервис маршрутизации и ретрансляции.
 ///
@@ -30,6 +31,7 @@ class RoutingService extends ChangeNotifier {
     required this.rooms,
     required this.geo,
     required this.store,
+    required this.dialogs,
   });
 
   final IdentityService identity;
@@ -37,15 +39,13 @@ class RoutingService extends ChangeNotifier {
   final RoomService rooms;
   final GeoService geo;
   final MessageStore store;
+  final DialogsService dialogs;
 
   BluetoothTransport? _bt;
   WifiDirectTransport? _wifi;
 
   final List<Neighbor> _neighbors = [];
-  final Queue<ChatMessage> _messages = Queue();
   final Set<String> _seen = {};
-  final StreamController<ChatMessage> _messagesCtrl =
-      StreamController.broadcast();
   final StreamController<Neighbor> _neighborsCtrl =
       StreamController.broadcast();
 
@@ -64,8 +64,6 @@ class RoutingService extends ChangeNotifier {
   bool get isRunning => _running;
 
   List<Neighbor> get neighbors => List.unmodifiable(_neighbors);
-  List<ChatMessage> get messages => _messages.toList().reversed.toList();
-  Stream<ChatMessage> get onMessage => _messagesCtrl.stream;
   Stream<Neighbor> get onNeighbor => _neighborsCtrl.stream;
 
   void attachBluetooth(BluetoothTransport bt) => _bt = bt;
@@ -134,7 +132,6 @@ class RoutingService extends ChangeNotifier {
     geo.stop();
     _bt?.stop();
     _wifi?.stop();
-    _messagesCtrl.close();
     _neighborsCtrl.close();
     notifyListeners();
   }
@@ -144,7 +141,6 @@ class RoutingService extends ChangeNotifier {
     // Личные сообщения шифруем (E2E). Broadcast (to==null)
     // и сообщения в общем чате передаются открыто.
     final isPrivate = to != null && to.isNotEmpty;
-    final storedText = text;
     final wireText = isPrivate
         ? SecureChat.encrypt(text, identity.alias, to, id)
         : text;
@@ -157,27 +153,51 @@ class RoutingService extends ChangeNotifier {
       signature: identity.sign('$id|$text'),
       payload: {'text': wireText, 'enc': isPrivate},
     );
-    final msg = ChatMessage(
-      id: id,
+    if (isPrivate) {
+      final msg = ChatMessage(
+        id: id,
+        from: identity.alias,
+        to: to,
+        peerId: to,
+        text: text,
+        timestamp: DateTime.now().millisecondsSinceEpoch,
+        status: DeliveryStatus.sending,
+        hops: 0,
+        isMine: true,
+      );
+      await dialogs.add(msg);
+      await _sendRaw(pkt);
+      await _updateMessageStatus(id, DeliveryStatus.sent);
+      notifyListeners();
+    } else {
+      // Broadcast отправляется без личного диалога (используется
+      // sendBroadcast() ниже).
+      await _sendRaw(pkt);
+    }
+  }
+
+  /// Публичное объявление (видят все в mesh).
+  Future<void> sendBroadcast(String text) async {
+    if (text.trim().isEmpty) return;
+    final id = IdentityService.newPacketId();
+    final pkt = MeshPacket(
+      type: MeshMessageType.text,
       from: identity.alias,
-      to: to,
-      text: storedText,
-      timestamp: DateTime.now().millisecondsSinceEpoch,
-      status: DeliveryStatus.sending,
-      hops: 0,
-      isMine: true,
+      id: id,
+      ttl: 6,
+      signature: identity.sign('$id|$text'),
+      payload: {'text': text, 'enc': false},
     );
-    _messages.addFirst(msg);
-    _messagesCtrl.add(msg);
     await _sendRaw(pkt);
-    _updateMessageStatus(id, DeliveryStatus.sent);
-    notifyListeners();
+    LocalNotify.system(
+      id: id.hashCode & 0x7fffffff,
+      title: 'Объявление отправлено',
+      body: 'Все увидят: «$text»',
+    );
   }
 
   Future<void> sendSos(String text) async {
     final id = IdentityService.newPacketId();
-    // Пробуем добавить GPS-координаты отправителя — это критически
-    // важно для экстренной помощи.
     final pos = geo.position;
     final payload = <String, dynamic>{
       'text': text,
@@ -196,18 +216,12 @@ class RoutingService extends ChangeNotifier {
       signature: identity.sign('$id|SOS'),
       payload: payload,
     );
-    final msg = ChatMessage(
-      id: id,
-      from: identity.alias,
-      text: '🚨 SOS: $text',
-      timestamp: DateTime.now().millisecondsSinceEpoch,
-      status: DeliveryStatus.sending,
-      isMine: true,
-    );
-    _messages.addFirst(msg);
-    _messagesCtrl.add(msg);
     await _sendRaw(pkt);
-    _updateMessageStatus(id, DeliveryStatus.sent);
+    LocalNotify.alert(
+      id: id.hashCode & 0x7fffffff,
+      title: '🚨 SOS отправлено',
+      body: 'Сеть узнает, что вам нужна помощь',
+    );
   }
 
   /// Публикация сообщения в городской комнате.
@@ -285,7 +299,7 @@ class RoutingService extends ChangeNotifier {
     }
   }
 
-  void _onIncoming(Telegram t) {
+  Future<void> _onIncoming(Telegram t) async {
     final pkt = MeshPacket.decode(t.data);
     if (pkt == null) return;
     if (_seen.contains(pkt.id)) return;
@@ -336,16 +350,17 @@ class RoutingService extends ChangeNotifier {
               displayText = '🔒 [не удалось расшифровать]';
             }
           } else if (SecureChat.isEncrypted(rawText) && pkt.to != null) {
-            // Старый формат без флага enc — пытаемся всё равно.
             final dec = SecureChat.decrypt(
               rawText, pkt.from, pkt.to!, pkt.id,
             );
             if (dec != null) displayText = dec;
           }
+          final peer = pkt.to == identity.alias ? pkt.from : (pkt.to ?? pkt.from);
           final msg = ChatMessage(
             id: pkt.id,
             from: pkt.from,
             to: pkt.to,
+            peerId: peer,
             text: displayText,
             timestamp: pkt.timestamp == 0
                 ? DateTime.now().millisecondsSinceEpoch
@@ -354,8 +369,14 @@ class RoutingService extends ChangeNotifier {
             hops: pkt.hop,
             isMine: false,
           );
-          _messages.addFirst(msg);
-          _messagesCtrl.add(msg);
+          await dialogs.add(msg, incrementUnread: true);
+          // Локальное push-уведомление — работает офлайн, без сервера.
+          await LocalNotify.message(
+            id: pkt.id.hashCode & 0x7fffffff,
+            title: 'Сообщение от ${pkt.from}',
+            body: displayText,
+            payload: peer,
+          );
           // ACK
           _sendRaw(MeshPacket(
             type: MeshMessageType.ack,
@@ -366,7 +387,6 @@ class RoutingService extends ChangeNotifier {
             signature: identity.sign('ack'),
             payload: {'id': pkt.id, 'group': identity.groupId},
           ));
-          // Сообщение доставлено — больше не ретранслируем.
           store.markDelivered(pkt.id);
         }
         if (pkt.ttl > 1) {
@@ -389,24 +409,20 @@ class RoutingService extends ChangeNotifier {
         if (isForMe) {
           final lat = pkt.payload['lat'];
           final lon = pkt.payload['lon'];
-          String text = '🚨 SOS: ${pkt.payload['text'] ?? ''}';
+          String text = '🚨 ${pkt.payload['text'] ?? ''}';
+          String bodyText = text;
           if (lat != null && lon != null) {
             final latStr = (lat as num).toStringAsFixed(5);
             final lonStr = (lon as num).toStringAsFixed(5);
             text += '\n📍 $latStr, $lonStr';
+            bodyText = '${pkt.payload['text'] ?? ''} — $latStr, $lonStr';
           }
-          final msg = ChatMessage(
-            id: pkt.id,
-            from: pkt.from,
-            to: pkt.to,
-            text: text,
-            timestamp: pkt.timestamp,
-            status: DeliveryStatus.delivered,
-            hops: pkt.hop,
-            isMine: false,
+          await LocalNotify.alert(
+            id: pkt.id.hashCode & 0x7fffffff,
+            title: '🚨 SOS от ${pkt.from}',
+            body: bodyText,
+            payload: pkt.from,
           );
-          _messages.addFirst(msg);
-          _messagesCtrl.add(msg);
         }
         if (pkt.ttl > 1) {
           _sendRaw(pkt.copyWith(ttl: pkt.ttl - 1, hop: pkt.hop + 1));
@@ -540,13 +556,16 @@ class RoutingService extends ChangeNotifier {
     }
   }
 
-  void _updateMessageStatus(String id, DeliveryStatus status) {
-    for (var i = 0; i < _messages.length; i++) {
-      final m = _messages.elementAt(i);
+  Future<void> _updateMessageStatus(String id, DeliveryStatus status) async {
+    // Ищем среди сообщений диалогов и обновляем статус.
+    final allMsgs = dialogs.conversations
+        .expand((c) => dialogs.messagesWith(c.peerId))
+        .toList();
+    for (final m in allMsgs) {
       if (m.id == id) {
-        _messages.remove(m);
-        _messages.add(m.copyWith(status: status));
-        _messagesCtrl.add(_messages.elementAt(i));
+        final updated = m.copyWith(status: status);
+        await dialogs.add(updated);
+        notifyListeners();
         return;
       }
     }

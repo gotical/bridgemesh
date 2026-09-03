@@ -5,9 +5,11 @@ import 'package:share_plus/share_plus.dart';
 
 import '../../models/contact.dart';
 import '../../services/contact_service.dart';
+import '../../services/dialogs_service.dart';
 import '../../services/identity_service.dart';
 import '../../services/routing_service.dart';
 import '../../theme/mesh_theme.dart';
+import 'chat_panel.dart';
 
 class ContactsPanel extends StatefulWidget {
   const ContactsPanel({
@@ -15,11 +17,13 @@ class ContactsPanel extends StatefulWidget {
     required this.identity,
     required this.contacts,
     required this.routing,
+    required this.dialogs,
   });
 
   final IdentityService identity;
   final ContactService contacts;
   final RoutingService routing;
+  final DialogsService dialogs;
 
   @override
   State<ContactsPanel> createState() => _ContactsPanelState();
@@ -225,7 +229,22 @@ class _ContactsPanelState extends State<ContactsPanel> {
         else
           ...all.map((c) => _ContactTile(
                 contact: c,
-                onTap: () => _showHistory(c),
+                onTap: () async {
+                  // Открываем диалог 1-на-1 с человеком.
+                  await Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => ChatPanel(
+                        identity: widget.identity,
+                        routing: widget.routing,
+                        contacts: widget.contacts,
+                        dialogs: widget.dialogs,
+                        peerId: c.alias,
+                        peerName: c.displayName,
+                      ),
+                    ),
+                  );
+                  if (mounted) setState(() {});
+                },
                 onRemove: () => widget.contacts.removeContact(c.nodeId),
               )),
         if (learned.isNotEmpty) ...[

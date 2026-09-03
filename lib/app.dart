@@ -15,6 +15,8 @@ import 'services/backup_service.dart';
 import 'services/phonebook_service.dart';
 import 'services/power_mode.dart';
 import 'services/foreground_service.dart';
+import 'services/dialogs_service.dart';
+import 'services/local_notify.dart';
 import 'ui/home_screen.dart';
 
 class BridgeMeshApp extends StatefulWidget {
@@ -36,6 +38,7 @@ class _BridgeMeshAppState extends State<BridgeMeshApp> {
   late final BackupService _backup;
   late final PhoneBookService _phonebook;
   late final PowerModeService _power;
+  late final DialogsService _dialogs;
   late final RoutingService _routing;
 
   @override
@@ -52,6 +55,7 @@ class _BridgeMeshAppState extends State<BridgeMeshApp> {
     _contacts.bindPhoneBook(_phonebook);
     _rooms = RoomService(_identity, _geo);
     _store = MessageStore(_identity);
+    _dialogs = DialogsService(_identity);
     _backup = BackupService(
       identity: _identity,
       contacts: _contacts,
@@ -63,6 +67,7 @@ class _BridgeMeshAppState extends State<BridgeMeshApp> {
       rooms: _rooms,
       geo: _geo,
       store: _store,
+      dialogs: _dialogs,
     );
     _routing.attachBluetooth(_bt);
     _routing.attachWifi(_wifi);
@@ -73,6 +78,7 @@ class _BridgeMeshAppState extends State<BridgeMeshApp> {
   }
 
   Future<void> _boot() async {
+    await LocalNotify.init();
     await Future.wait<void>([
       _identity.load(),
       _contacts.load(),
@@ -80,6 +86,7 @@ class _BridgeMeshAppState extends State<BridgeMeshApp> {
       _store.load(),
       _phonebook.load(),
       _power.load(),
+      _dialogs.load(),
     ]);
     _applyPowerMode();
     if (!mounted) return;
@@ -128,6 +135,7 @@ class _BridgeMeshAppState extends State<BridgeMeshApp> {
         store: _store,
         backup: _backup,
         power: _power,
+        dialogs: _dialogs,
       ),
     );
   }
