@@ -150,17 +150,22 @@ class ContactService extends ChangeNotifierService {
   }
 
   /// Добавляет узел в мои контакты (по nodeId).
-  Future<void> addContact(String nodeId, {String? note}) async {
+  Future<void> addContact(
+    String nodeId, {
+    String? note,
+    String? alias,
+  }) async {
     final src = _learned.remove(nodeId) ??
         _requests.remove(nodeId) ??
         Contact(
           nodeId: nodeId,
-          alias: nodeId.substring(0, 4),
+          alias: alias ?? nodeId.substring(0, 4),
           addedAt: DateTime.now().millisecondsSinceEpoch,
           lastSeen: DateTime.now().millisecondsSinceEpoch,
         );
     src.note = note;
     _contacts[nodeId] = src.copyWith(
+      alias: alias ?? src.alias,
       lastSeen: DateTime.now().millisecondsSinceEpoch,
     );
     await _save(_kContactsKey, _contacts);

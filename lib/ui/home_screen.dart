@@ -182,6 +182,7 @@ class _HomeScreenState extends State<HomeScreen>
                         contacts: widget.contacts,
                         routing: widget.routing,
                         dialogs: widget.dialogs,
+                        permissions: widget.permissions,
                       ),
                       NearbyPanel(
                         routing: widget.routing,

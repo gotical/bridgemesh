@@ -7,9 +7,11 @@ import '../../models/contact.dart';
 import '../../services/contact_service.dart';
 import '../../services/dialogs_service.dart';
 import '../../services/identity_service.dart';
+import '../../services/permission_service.dart';
 import '../../services/routing_service.dart';
 import '../../theme/mesh_theme.dart';
 import 'chat_panel.dart';
+import 'qr_scanner_screen.dart';
 
 class ContactsPanel extends StatefulWidget {
   const ContactsPanel({
@@ -18,12 +20,14 @@ class ContactsPanel extends StatefulWidget {
     required this.contacts,
     required this.routing,
     required this.dialogs,
+    required this.permissions,
   });
 
   final IdentityService identity;
   final ContactService contacts;
   final RoutingService routing;
   final DialogsService dialogs;
+  final PermissionService permissions;
 
   @override
   State<ContactsPanel> createState() => _ContactsPanelState();
@@ -60,6 +64,33 @@ class _ContactsPanelState extends State<ContactsPanel> {
       _myShareText(),
       subject: 'BridgeMesh — мой контакт',
     );
+  }
+
+  /// Сканирование QR-кода другого пользователя камерой.
+  Future<void> _scanQr() async {
+    final ok = await widget.permissions.ensureCamera();
+    if (!ok) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Нет доступа к камере. Откройте настройки и разрешите '
+            'BridgeMesh использовать камеру.',
+          ),
+        ),
+      );
+      return;
+    }
+    try {
+      final raw = await QrScannerScreen.scan(context);
+      if (raw == null || raw.isEmpty) return;
+      _handleDeepLink(raw);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Не удалось отсканировать: $e')),
+      );
+    }
   }
 
   /// Ручное добавление: пользователь вводит Node ID другого
@@ -138,12 +169,11 @@ class _ContactsPanelState extends State<ContactsPanel> {
       ),
     );
     if (result != null) {
-      await widget.contacts.addContact(result.nodeId, note: 'Введён вручную');
-      // Также применим alias, если введён.
-      if (result.alias.isNotEmpty && result.alias != result.nodeId.substring(0, 4)) {
-        // Локально меняем алиас, отправив свою визитку с этим именем.
-        // Для чужого контакта это ничего не делает.
-      }
+      await widget.contacts.addContact(
+        result.nodeId,
+        alias: result.alias,
+        note: 'Введён вручную',
+      );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -161,7 +191,11 @@ class _ContactsPanelState extends State<ContactsPanel> {
       final id = uri.queryParameters['id'] ?? '';
       final alias = uri.queryParameters['alias'] ?? id;
       if (id.isEmpty) return;
-      widget.contacts.addContact(id, note: 'QR / share');
+      widget.contacts.addContact(
+        id,
+        alias: alias,
+        note: 'QR / share',
+      );
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Добавлен контакт $alias (${id.substring(0, 4)}…)'),
@@ -196,6 +230,7 @@ class _ContactsPanelState extends State<ContactsPanel> {
           shareText: _myShareText(),
           onShare: _shareDeepLink,
           onEnter: _enterContactCode,
+          onScan: _scanQr,
           onBroadcast: _broadcastCard,
         ),
         const SizedBox(height: 16),
@@ -284,6 +319,7 @@ class _MyCard extends StatelessWidget {
     required this.shareText,
     required this.onShare,
     required this.onEnter,
+    required this.onScan,
     required this.onBroadcast,
   });
 
@@ -291,6 +327,7 @@ class _MyCard extends StatelessWidget {
   final String shareText;
   final VoidCallback onShare;
   final VoidCallback onEnter;
+  final VoidCallback onScan;
   final VoidCallback onBroadcast;
 
   @override
@@ -390,24 +427,40 @@ class _MyCard extends StatelessWidget {
             children: [
               Expanded(
                 child: ElevatedButton.icon(
-                  onPressed: onEnter,
-                  icon: const Icon(Icons.keyboard),
-                  label: const Text('Ввести код'),
+                  onPressed: onScan,
+                  icon: const Icon(Icons.qr_code_scanner),
+                  label: const Text('Сканировать'),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: MeshTheme.surfaceAlt,
-                    foregroundColor: MeshTheme.textPrimary,
+                    backgroundColor: MeshTheme.primary,
+                    foregroundColor: Colors.black,
+                    minimumSize: const Size.fromHeight(46),
                   ),
                 ),
               ),
               const SizedBox(width: 8),
               Expanded(
                 child: ElevatedButton.icon(
-                  onPressed: onShare,
-                  icon: const Icon(Icons.share),
-                  label: const Text('Поделиться'),
+                  onPressed: onEnter,
+                  icon: const Icon(Icons.keyboard),
+                  label: const Text('Ввести код'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: MeshTheme.surfaceAlt,
+                    foregroundColor: MeshTheme.textPrimary,
+                    minimumSize: const Size.fromHeight(46),
+                  ),
                 ),
               ),
             ],
+          ),
+          const SizedBox(height: 8),
+          ElevatedButton.icon(
+            onPressed: onShare,
+            icon: const Icon(Icons.share),
+            label: const Text('Поделиться ссылкой/QR'),
+            style: ElevatedButton.styleFrom(
+              foregroundColor: MeshTheme.textPrimary,
+              minimumSize: const Size.fromHeight(44),
+            ),
           ),
           const SizedBox(height: 8),
           ElevatedButton.icon(

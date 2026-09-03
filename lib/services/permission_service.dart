@@ -14,6 +14,12 @@ class PermissionService {
     return PermissionReport(results);
   }
 
+  /// Запросить разрешение камеры (для сканирования QR).
+  Future<bool> ensureCamera() async {
+    final s = await Permission.camera.request();
+    return s.isGranted || s.isLimited;
+  }
+
   /// Проверяет, есть ли всё критичное для запуска mesh.
   bool canMesh(PermissionReport report) {
     return report.results['bluetoothScan']?.isGranted == true &&
